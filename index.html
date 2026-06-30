@@ -396,6 +396,10 @@ function localSetJSON(key, value){
 }
 
 /* ============== Dropbox-backed shared data (history + custom drugs) ============== */
+function dbxArgHeader(obj){
+  // Dropbox API headers must be 7-bit ASCII; escape non-ASCII chars (e.g. Japanese paths) as \uXXXX
+  return JSON.stringify(obj).replace(/[\u0080-\uffff]/g, c => '\\u' + ('000' + c.charCodeAt(0).toString(16)).slice(-4));
+}
 const DBX_DATA_PATH_SUFFIX = ''; // data file path comes from settings (s-dbx-datapath)
 let dataSyncing = false;
 
@@ -405,7 +409,7 @@ async function dbxDownloadJSON(path){
     method:'POST',
     headers:{
       'Authorization': 'Bearer ' + accessToken,
-      'Dropbox-API-Arg': JSON.stringify({path})
+      'Dropbox-API-Arg': dbxArgHeader({path})
     }
   });
   if(resp.status === 409){
@@ -427,7 +431,7 @@ async function dbxUploadJSON(path, obj){
     method:'POST',
     headers:{
       'Authorization': 'Bearer ' + accessToken,
-      'Dropbox-API-Arg': JSON.stringify({path, mode:'overwrite', autorename:false, mute:true}),
+      'Dropbox-API-Arg': dbxArgHeader({path, mode:'overwrite', autorename:false, mute:true}),
       'Content-Type': 'application/octet-stream'
     },
     body: blob
@@ -837,7 +841,7 @@ document.getElementById('btn-test-dbx').addEventListener('click', async ()=>{
       method: 'POST',
       headers: {
         'Authorization': 'Bearer ' + tokenData.access_token,
-        'Dropbox-API-Arg': JSON.stringify({path: dataPath})
+        'Dropbox-API-Arg': dbxArgHeader({path: dataPath})
       }
     });
     if(dlResp.ok){
@@ -899,7 +903,7 @@ document.getElementById('btn-upload-dropbox').addEventListener('click', async ()
       method:'POST',
       headers:{
         'Authorization': 'Bearer ' + accessToken,
-        'Dropbox-API-Arg': JSON.stringify({
+        'Dropbox-API-Arg': dbxArgHeader({
           path: DBX_SETTINGS.path,
           mode: 'overwrite',
           autorename: false,
