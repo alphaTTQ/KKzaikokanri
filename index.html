@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>桂香堂 在庫移動管理</title>
+<title>医薬品在庫管理システム</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -212,7 +212,7 @@
 <div class="app">
 
   <header class="top">
-    <h1>桂香堂 在庫移動管理</h1>
+    <h1>医薬品在庫管理システム</h1>
     <p>調剤包装単位コードをスキャンして在庫移動を記録</p>
   </header>
 
@@ -265,7 +265,9 @@
         <select id="f-store">
           <option value="桂香堂カブ薬局">桂香堂カブ薬局</option>
           <option value="桂香堂ファーマシー">桂香堂ファーマシー</option>
+          <option value="__custom__">その他（名前を入力）</option>
         </select>
+        <input type="text" id="f-store-custom" placeholder="移動先店舗名を入力" style="display:none;margin-top:8px;">
 
         <label style="display:flex;align-items:center;gap:8px;margin-top:14px;">
           <input type="checkbox" id="f-savecode" style="width:auto;">
@@ -289,6 +291,9 @@
         <div class="stat-line" id="history-stat" style="display:none;">
           <span></span><span></span>
         </div>
+        <div style="height:10px;"></div>
+        <button class="btn btn-secondary" id="btn-print-slip" disabled>🖨 選択した内容を伝票印刷</button>
+        <div class="helptext">移動先店舗が異なるものは同時に選べません（店舗名が空欄のものはどちらとも一緒に選べます）。</div>
       </div>
 
       <div class="card">
@@ -559,6 +564,7 @@ function parseGS1(raw){
 
 /* ============== scanning (zxing-wasm: supports GS1 DataBar Limited/Stacked/Code128) ============== */
 let mediaStream = null;
+let audioCtx = null;
 let scanning = false;
 let scanCanvas = null;
 let scanCtx = null;
@@ -579,6 +585,18 @@ document.getElementById('btn-stop-scan').addEventListener('click', stopScan);
 async function startScan(){
   document.getElementById('scan-area').style.display = 'block';
   document.getElementById('entry-card').style.display = 'none';
+
+  // Create/resume the AudioContext here, synchronously within the click
+  // handler, so iOS Safari/Firefox allow sound playback later when a
+  // barcode is detected (audio can't be started outside a user gesture).
+  try{
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if(!audioCtx) audioCtx = new Ctx();
+    if(audioCtx.state === 'suspended') await audioCtx.resume();
+  }catch(e){
+    console.error('audio init failed', e);
+  }
+
   try{
     await loadZXingWasm();
 
@@ -658,8 +676,8 @@ function stopScan(){
 
 function playBeep(){
   try{
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    const ctx = new Ctx();
+    if(!audioCtx) return;
+    const ctx = audioCtx;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
@@ -671,7 +689,6 @@ function playBeep(){
     gain.connect(ctx.destination);
     osc.start();
     osc.stop(ctx.currentTime + 0.2);
-    osc.onended = () => ctx.close();
   }catch(e){
     console.error('beep failed', e);
   }
@@ -714,9 +731,18 @@ function openEntryForCode(code, qtyHint){
   }
   document.getElementById('f-qty').value = qtyHint || 1;
   document.getElementById('f-date').value = new Date().toISOString().slice(0,10);
+  document.getElementById('f-store').value = '桂香堂カブ薬局';
+  document.getElementById('f-store-custom').value = '';
+  document.getElementById('f-store-custom').style.display = 'none';
   document.getElementById('entry-card').dataset.code = code;
   card.scrollIntoView({behavior:'smooth', block:'start'});
 }
+
+document.getElementById('f-store').addEventListener('change', (e)=>{
+  const customInput = document.getElementById('f-store-custom');
+  customInput.style.display = e.target.value === '__custom__' ? 'block' : 'none';
+  if(e.target.value === '__custom__') customInput.focus();
+});
 
 document.getElementById('btn-cancel-entry').addEventListener('click', ()=>{
   document.getElementById('entry-card').style.display = 'none';
@@ -728,10 +754,14 @@ document.getElementById('btn-save-entry').addEventListener('click', async ()=>{
   const price = document.getElementById('f-price').value;
   const qty = document.getElementById('f-qty').value;
   const date = document.getElementById('f-date').value;
-  const store = document.getElementById('f-store').value;
+  const storeSelectValue = document.getElementById('f-store').value;
+  const store = storeSelectValue === '__custom__'
+    ? document.getElementById('f-store-custom').value.trim()
+    : storeSelectValue;
 
   if(!name){ showToast('名称を入力してください', true); return; }
   if(!qty){ showToast('数量を入力してください', true); return; }
+  if(!store){ showToast('移動先店舗を入力してください', true); return; }
 
   const entry = {
     id: 'h_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
@@ -762,9 +792,13 @@ function escapeHtml(s){
 }
 
 /* ============== history view ============== */
+let selectedHistoryIds = new Set();
+
 function renderHistory(){
   const wrap = document.getElementById('history-table-wrap');
   const statEl = document.getElementById('history-stat');
+  selectedHistoryIds.clear();
+  updatePrintButtonState();
   if(HISTORY.length === 0){
     wrap.innerHTML = `<div class="empty-state"><span class="big">📦</span>まだ履歴がありません<br>「スキャン」タブから登録してください</div>`;
     statEl.style.display = 'none';
@@ -775,6 +809,7 @@ function renderHistory(){
     totalQty += Number(h.qty)||0;
     totalAmount += (Number(h.qty)||0) * (Number(h.price)||0);
     return `<tr>
+      <td><input type="checkbox" class="hist-check" data-id="${h.id}" style="width:auto;"></td>
       <td>${escapeHtml(h.date||'')}</td>
       <td>${escapeHtml(h.name||'')}</td>
       <td class="num">${h.qty}</td>
@@ -784,7 +819,7 @@ function renderHistory(){
     </tr>`;
   }).join('');
   wrap.innerHTML = `<table class="hist">
-    <thead><tr><th>日付</th><th>名称</th><th>数量</th><th>薬価</th><th>移動先</th><th></th></tr></thead>
+    <thead><tr><th></th><th>日付</th><th>名称</th><th>数量</th><th>薬価</th><th>移動先</th><th></th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
   statEl.style.display = 'flex';
@@ -799,6 +834,106 @@ function renderHistory(){
       renderHistory();
     });
   });
+
+  wrap.querySelectorAll('.hist-check').forEach(cb=>{
+    cb.addEventListener('change', (e)=>{
+      const id = cb.dataset.id;
+      if(cb.checked){
+        const entry = HISTORY.find(h=>h.id===id);
+        const newStore = (entry && entry.store) ? entry.store.trim() : '';
+        if(newStore){
+          // block if a different non-empty store is already selected
+          const conflict = [...selectedHistoryIds].some(sid=>{
+            const e2 = HISTORY.find(h=>h.id===sid);
+            const s2 = (e2 && e2.store) ? e2.store.trim() : '';
+            return s2 && s2 !== newStore;
+          });
+          if(conflict){
+            cb.checked = false;
+            showToast('移動先店舗が異なる項目は同時に選べません', true);
+            return;
+          }
+        }
+        selectedHistoryIds.add(id);
+      } else {
+        selectedHistoryIds.delete(id);
+      }
+      updatePrintButtonState();
+    });
+  });
+}
+
+function updatePrintButtonState(){
+  const btn = document.getElementById('btn-print-slip');
+  if(btn) btn.disabled = selectedHistoryIds.size === 0;
+}
+
+document.getElementById('btn-print-slip').addEventListener('click', ()=>{
+  const items = HISTORY.filter(h=>selectedHistoryIds.has(h.id));
+  if(items.length === 0) return;
+  printSlip(items);
+});
+
+function printSlip(items){
+  const storeName = items.map(i=>(i.store||'').trim()).find(s=>s) || '';
+  const today = new Date().toISOString().slice(0,10);
+  let totalQty = 0, totalAmount = 0;
+  const rowsHtml = items.map(i=>{
+    totalQty += Number(i.qty)||0;
+    totalAmount += (Number(i.qty)||0) * (Number(i.price)||0);
+    return `<tr>
+      <td>${escapeHtml(i.date||'')}</td>
+      <td>${escapeHtml(i.name||'')}</td>
+      <td style="text-align:right;">${i.qty}</td>
+      <td style="text-align:right;">${i.price!=null?Number(i.price).toLocaleString('ja-JP'):'-'}</td>
+      <td>${escapeHtml(i.store||'')}</td>
+    </tr>`;
+  }).join('');
+
+  const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">
+  <title>在庫移動伝票</title>
+  <style>
+    body{font-family:"Hiragino Sans","Yu Gothic",sans-serif;color:#1f2a24;padding:24px;}
+    h1{font-size:20px;margin:0 0 4px;}
+    .meta{font-size:13px;color:#555;margin-bottom:18px;}
+    table{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:18px;}
+    th,td{border:1px solid #999;padding:6px 8px;}
+    th{background:#eee;text-align:left;}
+    .totals{text-align:right;font-size:13px;margin-bottom:30px;}
+    .stamps{display:flex;gap:24px;margin-top:40px;}
+    .stamp-box{flex:1;border:1px solid #999;padding:10px;min-height:90px;}
+    .stamp-label{font-size:12px;color:#555;margin-bottom:6px;}
+    @media print{ .no-print{display:none;} }
+  </style></head>
+  <body>
+    <h1>在庫移動伝票</h1>
+    <div class="meta">
+      発行日: ${escapeHtml(today)}　／　店舗: ${escapeHtml(storeName || '桂香堂')}
+    </div>
+    <table>
+      <thead><tr><th>日付</th><th>名称</th><th>数量</th><th>薬価</th><th>移動先店舗</th></tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+    <div class="totals">
+      合計数量: ${totalQty}　／　合計金額目安: ¥${totalAmount.toLocaleString('ja-JP')}
+    </div>
+    <div class="stamps">
+      <div class="stamp-box"><div class="stamp-label">担当者印</div></div>
+      <div class="stamp-box"><div class="stamp-label">受取人印</div></div>
+    </div>
+    <div class="no-print" style="margin-top:24px;">
+      <button onclick="window.print()" style="padding:10px 18px;font-size:14px;">印刷する</button>
+    </div>
+  </body></html>`;
+
+  const win = window.open('', '_blank');
+  if(!win){
+    showToast('ポップアップがブロックされました。ブラウザの設定をご確認ください', true);
+    return;
+  }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
 }
 
 /* ============== xlsx export ============== */
