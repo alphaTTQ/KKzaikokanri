@@ -499,6 +499,50 @@ async function syncToDropbox(){
   }
 }
 
+// Build the xlsx workbook and upload it to Dropbox (silent: no toast on success/failure by default)
+async function uploadXlsxToDropbox(silent){
+  if(!dbxReady()) return false;
+  if(HISTORY.length === 0) return false;
+  try{
+    const accessToken = await getDropboxAccessToken();
+    const wb = buildWorkbook();
+    const wbout = XLSX.write(wb, {bookType:'xlsx', type:'array'});
+    const blob = new Blob([wbout], {type:'application/octet-stream'});
+    const resp = await fetch('https://content.dropboxapi.com/2/files/upload', {
+      method:'POST',
+      headers:{
+        'Authorization': 'Bearer ' + accessToken,
+        'Dropbox-API-Arg': dbxArgHeader({
+          path: DBX_SETTINGS.path,
+          mode: 'overwrite',
+          autorename: false,
+          mute: true
+        }),
+        'Content-Type': 'application/octet-stream'
+      },
+      body: blob
+    });
+    if(!resp.ok){
+      const errText = await resp.text();
+      throw new Error(errText);
+    }
+    if(!silent) showToast('Dropboxに保存しました');
+    return true;
+  }catch(e){
+    console.error('xlsx upload failed', e);
+    if(!silent) showToast('Excelのアップロードに失敗しました。設定内容や権限をご確認ください。', true);
+    return false;
+  }
+}
+
+// Combined: sync the JSON data file AND keep the Excel backup up to date.
+// Used after every change (register / delete / add drug / remove drug).
+async function syncDataAndExcel(){
+  const ok = await syncToDropbox();
+  await uploadXlsxToDropbox(true); // silent: don't show a separate toast for the Excel part
+  return ok;
+}
+
 /* ============== toast ============== */
 let toastTimer=null;
 function showToast(msg, isErr){
@@ -779,7 +823,7 @@ document.getElementById('btn-save-entry').addEventListener('click', async ()=>{
       CUSTOM_DB[code] = {name, price: price===''?null:Number(price)};
     }
 
-    await syncToDropbox();
+    await syncDataAndExcel();
     showToast('登録しました');
     document.getElementById('entry-card').style.display = 'none';
   } finally {
@@ -811,15 +855,14 @@ function renderHistory(){
     return `<tr>
       <td><input type="checkbox" class="hist-check" data-id="${h.id}" style="width:auto;"></td>
       <td>${escapeHtml(h.date||'')}</td>
-      <td>${escapeHtml(h.name||'')}</td>
+      <td>${escapeHtml(h.name||'')}${h.store ? `<div style="font-size:11px;color:var(--muted);margin-top:2px;">→ ${escapeHtml(h.store)}</div>` : ''}</td>
       <td class="num">${h.qty}</td>
       <td class="num">${h.price!=null?Number(h.price).toLocaleString('ja-JP'):'-'}</td>
-      <td>${escapeHtml(h.store||'')}</td>
       <td><button class="del-btn" data-id="${h.id}">削除</button></td>
     </tr>`;
   }).join('');
   wrap.innerHTML = `<table class="hist">
-    <thead><tr><th></th><th>日付</th><th>名称</th><th>数量</th><th>薬価</th><th>移動先</th><th></th></tr></thead>
+    <thead><tr><th></th><th>日付</th><th>名称</th><th>数量</th><th>薬価</th><th></th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
   statEl.style.display = 'flex';
@@ -830,7 +873,7 @@ function renderHistory(){
     b.addEventListener('click', async ()=>{
       if(!confirm('この履歴を削除しますか？')) return;
       HISTORY = HISTORY.filter(h=>h.id !== b.dataset.id);
-      await syncToDropbox();
+      await syncDataAndExcel();
       renderHistory();
     });
   });
@@ -1110,33 +1153,7 @@ document.getElementById('btn-upload-dropbox').addEventListener('click', async ()
   const btn = document.getElementById('btn-upload-dropbox');
   btn.disabled = true; btn.textContent = 'アップロード中…';
   try{
-    const accessToken = await getDropboxAccessToken();
-
-    const wb = buildWorkbook();
-    const wbout = XLSX.write(wb, {bookType:'xlsx', type:'array'});
-    const blob = new Blob([wbout], {type:'application/octet-stream'});
-    const resp = await fetch('https://content.dropboxapi.com/2/files/upload', {
-      method:'POST',
-      headers:{
-        'Authorization': 'Bearer ' + accessToken,
-        'Dropbox-API-Arg': dbxArgHeader({
-          path: DBX_SETTINGS.path,
-          mode: 'overwrite',
-          autorename: false,
-          mute: true
-        }),
-        'Content-Type': 'application/octet-stream'
-      },
-      body: blob
-    });
-    if(!resp.ok){
-      const errText = await resp.text();
-      throw new Error(errText);
-    }
-    showToast('Dropboxに保存しました');
-  }catch(e){
-    console.error(e);
-    showToast('アップロードに失敗しました。設定内容や権限をご確認ください。', true);
+    await uploadXlsxToDropbox(false);
   } finally {
     btn.disabled = false; btn.textContent = '☁ Dropboxに保存';
   }
@@ -1153,7 +1170,7 @@ document.getElementById('btn-add-drug').addEventListener('click', async ()=>{
   try{
     await syncFromDropbox(false);
     CUSTOM_DB[code] = {name, price: price===''?null:Number(price)};
-    await syncToDropbox();
+    await syncDataAndExcel();
     showToast('追加しました');
     document.getElementById('n-code').value='';
     document.getElementById('n-name').value='';
@@ -1179,7 +1196,7 @@ function renderCustomDrugs(){
   wrap.querySelectorAll('.del-btn').forEach(b=>{
     b.addEventListener('click', async ()=>{
       delete CUSTOM_DB[b.dataset.code];
-      await syncToDropbox();
+      await syncDataAndExcel();
       renderCustomDrugs();
     });
   });
