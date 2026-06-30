@@ -12,8 +12,8 @@
     --paper:#f6f3ec;
     --card:#ffffff;
     --line:#dcd5c4;
-    --moss:#3f5a47;
-    --moss-dark:#2c4233;
+    --moss:#3a9bbf;
+    --moss-dark:#1f6e8c;
     --terra:#b5562f;
     --gold:#a9842c;
     --muted:#7a7363;
@@ -146,7 +146,7 @@
   .found-card{
     border-radius:var(--radius);
     border:1.5px solid var(--moss);
-    background:#f1f5ef;
+    background:#eaf6fa;
     padding:16px;
     margin-top:14px;
   }
@@ -204,7 +204,7 @@
     border-radius:9px;padding:11px 13px;font-size:12.5px;line-height:1.6;
     word-break:break-all;white-space:pre-wrap;
   }
-  .test-result.ok{background:#eaf3ea;border:1.5px solid var(--moss);color:var(--moss-dark);}
+  .test-result.ok{background:#eaf6fa;border:1.5px solid var(--moss);color:var(--moss-dark);}
   .test-result.bad{background:#fbeee9;border:1.5px solid var(--terra);color:#7a2c1d;}
 </style>
 </head>
@@ -656,8 +656,31 @@ function stopScan(){
   document.getElementById('scan-area').style.display = 'none';
 }
 
+function playBeep(){
+  try{
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = 1200;
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.4, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.2);
+    osc.onended = () => ctx.close();
+  }catch(e){
+    console.error('beep failed', e);
+  }
+}
+
 function onScanSuccess(rawText){
   stopScan();
+  playBeep();
+  if(navigator.vibrate) navigator.vibrate(80);
   const parsed = parseGS1(rawText);
   const code = parsed.gtin || rawText.trim();
   openEntryForCode(code, parsed.qty);
