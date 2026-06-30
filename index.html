@@ -570,7 +570,12 @@ async function startScan(){
   document.getElementById('entry-card').style.display = 'none';
   try{
     const hints = new Map();
-    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.CODE_128]);
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+      ZXing.BarcodeFormat.CODE_128,
+      ZXing.BarcodeFormat.RSS_14,
+      ZXing.BarcodeFormat.RSS_EXPANDED
+    ]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
     codeReader = new ZXing.BrowserMultiFormatReader(hints);
     scanning = true;
 
