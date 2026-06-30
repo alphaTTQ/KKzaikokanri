@@ -201,6 +201,12 @@
   .field-grid{display:grid;grid-template-columns:1fr;gap:0;}
   a.linklike{color:var(--moss-dark);text-decoration:underline;font-size:13px;}
   .loading-row{text-align:center;color:var(--muted);padding:20px;font-size:13px;}
+  .test-result{
+    border-radius:9px;padding:11px 13px;font-size:12.5px;line-height:1.6;
+    word-break:break-all;white-space:pre-wrap;
+  }
+  .test-result.ok{background:#eaf3ea;border:1.5px solid var(--moss);color:var(--moss-dark);}
+  .test-result.bad{background:#fbeee9;border:1.5px solid var(--terra);color:#7a2c1d;}
 </style>
 </head>
 <body>
@@ -311,6 +317,8 @@
         <input type="text" id="s-dbx-path" value="/在庫管理/在庫移動履歴.xlsx">
         <div style="height:10px;"></div>
         <button class="btn btn-primary btn-sm" id="btn-save-dbx">保存</button>
+        <button class="btn btn-ghost btn-sm" id="btn-test-dbx" style="margin-top:8px;">接続テスト</button>
+        <div id="dbx-test-result" style="margin-top:10px;"></div>
         <div class="helptext">これらの情報はこの端末のブラウザにのみ保存され、他の人とは共有されません。お使いの端末ごとに設定が必要です。「Dropboxに保存」を押すたびに、リフレッシュトークンを使って一時的なアクセストークンを自動取得してからアップロードします。</div>
       </div>
 
@@ -764,6 +772,92 @@ document.getElementById('btn-save-dbx').addEventListener('click', async ()=>{
     renderCustomDrugs();
   } else {
     showToast('設定の保存に失敗しました', true);
+  }
+});
+
+document.getElementById('btn-test-dbx').addEventListener('click', async ()=>{
+  const resultEl = document.getElementById('dbx-test-result');
+  resultEl.innerHTML = '<div class="test-result">テスト中…</div>';
+
+  const appKey = document.getElementById('s-dbx-appkey').value.trim();
+  const appSecret = document.getElementById('s-dbx-appsecret').value.trim();
+  const refreshToken = document.getElementById('s-dbx-refresh').value.trim();
+  const dataPath = document.getElementById('s-dbx-datapath').value.trim() || '/在庫管理/data.json';
+
+  if(!appKey || !appSecret || !refreshToken){
+    resultEl.innerHTML = '<div class="test-result bad">App key・App secret・リフレッシュトークンをすべて入力してから「保存」を押し、その後にテストしてください。</div>';
+    return;
+  }
+
+  let log = [];
+  try{
+    log.push('① リフレッシュトークンでアクセストークンを取得中…');
+    resultEl.innerHTML = `<div class="test-result">${escapeHtml(log.join('\n'))}</div>`;
+
+    const params = new URLSearchParams();
+    params.set('grant_type', 'refresh_token');
+    params.set('refresh_token', refreshToken);
+    params.set('client_id', appKey);
+    params.set('client_secret', appSecret);
+
+    const tokenResp = await fetch('https://api.dropbox.com/oauth2/token', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: params.toString()
+    });
+    const tokenText = await tokenResp.text();
+    if(!tokenResp.ok){
+      log.push('✗ アクセストークン取得に失敗 (HTTP ' + tokenResp.status + ')');
+      log.push(tokenText);
+      resultEl.innerHTML = `<div class="test-result bad">${escapeHtml(log.join('\n'))}</div>`;
+      return;
+    }
+    const tokenData = JSON.parse(tokenText);
+    log.push('✓ アクセストークン取得に成功');
+
+    log.push('② Dropboxのアカウント情報を確認中…');
+    resultEl.innerHTML = `<div class="test-result">${escapeHtml(log.join('\n'))}</div>`;
+    const acctResp = await fetch('https://api.dropboxapi.com/2/users/get_current_account', {
+      method: 'POST',
+      headers: {'Authorization': 'Bearer ' + tokenData.access_token}
+    });
+    const acctText = await acctResp.text();
+    if(!acctResp.ok){
+      log.push('✗ アカウント確認に失敗 (HTTP ' + acctResp.status + ')');
+      log.push(acctText);
+      resultEl.innerHTML = `<div class="test-result bad">${escapeHtml(log.join('\n'))}</div>`;
+      return;
+    }
+    const acctData = JSON.parse(acctText);
+    log.push('✓ 接続成功: ' + (acctData.email || acctData.name?.display_name || ''));
+
+    log.push('③ データファイルの読み取りを確認中… (' + dataPath + ')');
+    resultEl.innerHTML = `<div class="test-result">${escapeHtml(log.join('\n'))}</div>`;
+    const dlResp = await fetch('https://content.dropboxapi.com/2/files/download', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + tokenData.access_token,
+        'Dropbox-API-Arg': JSON.stringify({path: dataPath})
+      }
+    });
+    if(dlResp.ok){
+      log.push('✓ データファイルが見つかりました(既存データを読み込めます)');
+    } else if(dlResp.status === 409){
+      log.push('・データファイルはまだ存在しません(初回保存時に自動作成されます。これはエラーではありません)');
+    } else {
+      const dlText = await dlResp.text();
+      log.push('✗ ファイル読み取りで予期しないエラー (HTTP ' + dlResp.status + ')');
+      log.push(dlText);
+      resultEl.innerHTML = `<div class="test-result bad">${escapeHtml(log.join('\n'))}</div>`;
+      return;
+    }
+
+    log.push('');
+    log.push('すべて正常です。「保存」を押してからご利用ください。');
+    resultEl.innerHTML = `<div class="test-result ok">${escapeHtml(log.join('\n'))}</div>`;
+  }catch(e){
+    log.push('✗ 通信エラー: ' + e.message);
+    resultEl.innerHTML = `<div class="test-result bad">${escapeHtml(log.join('\n'))}</div>`;
   }
 });
 
