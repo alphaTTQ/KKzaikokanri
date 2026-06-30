@@ -502,7 +502,7 @@ function showToast(msg, isErr){
   t.textContent = msg;
   t.className = 'toast show' + (isErr ? ' err' : '');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(()=>{ t.className='toast'; }, 2600);
+  toastTimer = setTimeout(()=>{ t.className='toast'; }, isErr ? 5500 : 2600);
 }
 
 /* ============== tabs ============== */
@@ -573,18 +573,31 @@ async function startScan(){
     hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.CODE_128]);
     codeReader = new ZXing.BrowserMultiFormatReader(hints);
     scanning = true;
-    const devices = await ZXing.BrowserCodeReader.listVideoInputDevices();
-    let deviceId = devices.length ? devices[devices.length-1].deviceId : undefined;
-    const back = devices.find(d=>/back|rear|environment/i.test(d.label));
-    if(back) deviceId = back.deviceId;
-    codeReader.decodeFromVideoDevice(deviceId, 'video', (result, err)=>{
+
+    // iOS Safari/Firefox: enumerateDevices() often returns nothing useful before
+    // permission is granted, which breaks decodeFromVideoDevice(). Requesting the
+    // camera directly via constraints triggers the permission prompt reliably.
+    const constraints = {
+      video: { facingMode: { ideal: 'environment' } },
+      audio: false
+    };
+    await codeReader.decodeFromConstraints(constraints, 'video', (result, err)=>{
       if(result && scanning){
         onScanSuccess(result.getText());
       }
     });
   }catch(e){
     console.error(e);
-    showToast('カメラを起動できませんでした。権限をご確認ください。', true);
+    let msg = 'カメラを起動できませんでした。';
+    if(e && e.name){
+      if(e.name === 'NotAllowedError') msg += '権限が拒否されています。ブラウザのサイト設定でカメラを許可してください。';
+      else if(e.name === 'NotFoundError') msg += '利用可能なカメラが見つかりません。';
+      else if(e.name === 'NotReadableError') msg += '他のアプリがカメラを使用中の可能性があります。';
+      else msg += `(${e.name}: ${e.message || ''})`;
+    } else {
+      msg += (e && e.message) ? `(${e.message})` : '';
+    }
+    showToast(msg, true);
     document.getElementById('scan-area').style.display = 'none';
   }
 }
