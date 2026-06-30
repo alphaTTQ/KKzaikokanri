@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>桂香堂 在庫移動管理</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
-<script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{
@@ -558,9 +557,21 @@ function parseGS1(raw){
   return result;
 }
 
-/* ============== scanning ============== */
-let codeReader = null;
+/* ============== scanning (zxing-wasm: supports GS1 DataBar Limited/Stacked/Code128) ============== */
+let mediaStream = null;
 let scanning = false;
+let scanCanvas = null;
+let scanCtx = null;
+let zxingReadBarcodes = null;
+let zxingBusy = false;
+let scanRafId = null;
+
+async function loadZXingWasm(){
+  if(zxingReadBarcodes) return zxingReadBarcodes;
+  const mod = await import('https://esm.sh/zxing-wasm@2.1.0/reader');
+  zxingReadBarcodes = mod.readBarcodes;
+  return zxingReadBarcodes;
+}
 
 document.getElementById('btn-start-scan').addEventListener('click', startScan);
 document.getElementById('btn-stop-scan').addEventListener('click', stopScan);
@@ -569,28 +580,21 @@ async function startScan(){
   document.getElementById('scan-area').style.display = 'block';
   document.getElementById('entry-card').style.display = 'none';
   try{
-    const hints = new Map();
-    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-      ZXing.BarcodeFormat.CODE_128,
-      ZXing.BarcodeFormat.RSS_14,
-      ZXing.BarcodeFormat.RSS_EXPANDED
-    ]);
-    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-    codeReader = new ZXing.BrowserMultiFormatReader(hints);
-    scanning = true;
+    await loadZXingWasm();
 
-    // iOS Safari/Firefox: enumerateDevices() often returns nothing useful before
-    // permission is granted, which breaks decodeFromVideoDevice(). Requesting the
-    // camera directly via constraints triggers the permission prompt reliably.
     const constraints = {
       video: { facingMode: { ideal: 'environment' } },
       audio: false
     };
-    await codeReader.decodeFromConstraints(constraints, 'video', (result, err)=>{
-      if(result && scanning){
-        onScanSuccess(result.getText());
-      }
-    });
+    mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+    const video = document.getElementById('video');
+    video.srcObject = mediaStream;
+    await video.play();
+
+    scanning = true;
+    scanCanvas = document.createElement('canvas');
+    scanCtx = scanCanvas.getContext('2d', {willReadFrequently:true});
+    scanLoop(video);
   }catch(e){
     console.error(e);
     let msg = 'カメラを起動できませんでした。';
@@ -607,17 +611,53 @@ async function startScan(){
   }
 }
 
+function scanLoop(video){
+  if(!scanning) return;
+  scanRafId = requestAnimationFrame(()=>scanLoop(video));
+  if(zxingBusy) return;
+  if(!video.videoWidth || !video.videoHeight) return;
+
+  scanCanvas.width = video.videoWidth;
+  scanCanvas.height = video.videoHeight;
+  scanCtx.drawImage(video, 0, 0, scanCanvas.width, scanCanvas.height);
+  let imageData;
+  try{
+    imageData = scanCtx.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
+  }catch(e){
+    return;
+  }
+
+  zxingBusy = true;
+  zxingReadBarcodes(imageData, {
+    tryHarder: true,
+    formats: ['Code128', 'DataBar', 'DataBarExpanded', 'DataBarLimited'],
+    maxNumberOfSymbols: 1
+  }).then(results=>{
+    zxingBusy = false;
+    if(scanning && results && results.length > 0 && results[0].text){
+      onScanSuccess(results[0].text);
+    }
+  }).catch(err=>{
+    zxingBusy = false;
+    console.error('decode error', err);
+  });
+}
+
 function stopScan(){
   scanning = false;
-  if(codeReader){ try{ codeReader.reset(); }catch(e){} }
+  if(scanRafId) cancelAnimationFrame(scanRafId);
+  scanRafId = null;
+  if(mediaStream){
+    mediaStream.getTracks().forEach(t=>t.stop());
+    mediaStream = null;
+  }
+  const video = document.getElementById('video');
+  video.srcObject = null;
   document.getElementById('scan-area').style.display = 'none';
 }
 
 function onScanSuccess(rawText){
-  scanning = false;
-  if(codeReader){ try{ codeReader.reset(); }catch(e){} }
-  document.getElementById('scan-area').style.display = 'none';
-
+  stopScan();
   const parsed = parseGS1(rawText);
   const code = parsed.gtin || rawText.trim();
   openEntryForCode(code, parsed.qty);
