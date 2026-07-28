@@ -958,21 +958,39 @@ function printSlip(items){
     return `${i.name}　${i.qty}${unit}`;
   }).join('、');
 
+  // shrink the item table (and surrounding spacing) as row count grows so everything still fits on one A4 page
+  const rowCount = items.length;
+  let tier = 0;
+  if(rowCount > 12) tier = 4;
+  else if(rowCount > 8) tier = 3;
+  else if(rowCount > 5) tier = 2;
+  else if(rowCount > 3) tier = 1;
+  const tableFont =  [13,  11,  9.5, 8,   7  ][tier];
+  const cellPadV =   [5,   3,   2,   1,   0.5][tier];
+  const cellPadH =   [7,   4,   3,   2,   1.5][tier];
+  const stampMinH =  [70,  50,  36,  26,  20 ][tier];
+  const halfPadV =   [7,   5,   4,   3,   2.5][tier];
+  const halfPadH =   [6,   4,   3,   3,   2.5][tier];
+  const h1Size =     [18,  15,  13,  11,  10 ][tier];
+  const metaMB =     [10,  6,   4,   2,   1  ][tier];
+  const totalsMB =   [14,  8,   5,   3,   2  ][tier];
+  const tableMB =    [10,  6,   4,   2,   1  ][tier];
+
   const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">
   <title>在庫移動伝票・領収書</title>
   <style>
     @page{ size: A4; margin: 10mm; }
     body{font-family:"Hiragino Sans","Yu Gothic",sans-serif;color:#1f2a24;margin:0;}
     .page{display:flex;flex-direction:column;min-height:273mm;}
-    .half{flex:1 1 50%;box-sizing:border-box;padding:8mm 6mm;display:flex;flex-direction:column;}
-    h1{font-size:20px;margin:0 0 4px;}
-    .meta{font-size:13px;color:#555;margin-bottom:14px;}
-    table{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px;}
-    th,td{border:1px solid #999;padding:6px 8px;}
+    .half{flex:1 1 50%;box-sizing:border-box;padding:${halfPadV}mm ${halfPadH}mm;display:flex;flex-direction:column;}
+    h1{font-size:${h1Size}px;margin:0 0 4px;}
+    .meta{font-size:13px;color:#555;margin-bottom:${metaMB}px;}
+    table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:${tableFont}px;margin-bottom:${tableMB}px;}
+    th,td{border:1px solid #999;padding:${cellPadV}px ${cellPadH}px;overflow-wrap:break-word;}
     th{background:#eee;text-align:left;}
-    .totals{text-align:right;font-size:13px;margin-bottom:20px;}
+    .totals{text-align:right;font-size:13px;margin-bottom:${totalsMB}px;}
     .stamps{display:flex;gap:24px;margin-top:auto;}
-    .stamp-box{flex:1;border:1px solid #999;padding:10px;min-height:80px;}
+    .stamp-box{flex:1;border:1px solid #999;padding:10px;min-height:${stampMinH}px;}
     .stamp-label{font-size:12px;color:#555;margin-bottom:6px;}
     td.handwrite{min-width:70px;}
     .cutline{position:relative;text-align:center;border-top:2px dashed #999;color:#888;font-size:11px;margin:0;padding-top:4px;}
@@ -994,6 +1012,10 @@ function printSlip(items){
           発行日: ${escapeHtml(today)}　／　店舗: ${escapeHtml(storeName || '桂香堂')}
         </div>
         <table>
+          <colgroup>
+            <col style="width:11%;"><col style="width:39%;"><col style="width:6%;">
+            <col style="width:10%;"><col style="width:13%;"><col style="width:10%;"><col style="width:11%;">
+          </colgroup>
           <thead><tr><th>日付</th><th>名称</th><th>数量</th><th>薬価</th><th>移動先店舗</th><th>ロット</th><th>使用期限</th></tr></thead>
           <tbody>${rowsHtml}</tbody>
         </table>
