@@ -637,6 +637,10 @@ document.getElementById('btn-start-scan').addEventListener('click', startScan);
 document.getElementById('btn-stop-scan').addEventListener('click', stopScan);
 
 async function startScan(){
+  if(!dbxReady()){
+    showToast('Dropboxと連携できていません。「設定」タブでDropbox連携情報を確認してください(この端末にのみ保存されます)', true);
+  }
+
   document.getElementById('scan-area').style.display = 'block';
   document.getElementById('entry-card').style.display = 'none';
 
