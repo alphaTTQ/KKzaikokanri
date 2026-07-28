@@ -1009,7 +1009,7 @@ function printSlip(items){
       <div class="half">
         <h1>在庫移動伝票</h1>
         <div class="meta">
-          発行日: ${escapeHtml(today)}　／　店舗: ${escapeHtml(storeName || '桂香堂')}
+          発行日: ${escapeHtml(today)}　／　店舗: 桂香堂カブ薬局
         </div>
         <table>
           <colgroup>
@@ -1033,7 +1033,8 @@ function printSlip(items){
       <div class="half">
         <div class="receipt-title">領　収　書</div>
         <div class="receipt-row">
-          <div class="fill" style="border-bottom:1px solid #333;font-size:16px;max-width:60%;">${escapeHtml(storeName || '')} 様</div>
+          <div class="fill" style="border-bottom:1px solid #333;font-size:16px;max-width:60%;flex:0 0 auto;width:60%;">${escapeHtml(storeName || '')}</div>
+          <span style="margin-left:10px;font-size:16px;">様</span>
         </div>
         <div class="receipt-row">
           <span class="label">金額</span>
