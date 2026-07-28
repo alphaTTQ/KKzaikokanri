@@ -998,7 +998,7 @@ function printSlip(items){
           <tbody>${rowsHtml}</tbody>
         </table>
         <div class="totals">
-          合計数量: ${totalQty}　／　合計金額目安: ¥${totalAmount.toLocaleString('ja-JP')}
+          合計数量: ${totalQty}　／　合計金額目安: ¥${Math.floor(totalAmount).toLocaleString('ja-JP')}
         </div>
         <div class="stamps">
           <div class="stamp-box"><div class="stamp-label">担当者印</div></div>
@@ -1015,7 +1015,7 @@ function printSlip(items){
         </div>
         <div class="receipt-row">
           <span class="label">金額</span>
-          <span class="receipt-amount">¥${totalAmount.toLocaleString('ja-JP')}－</span>
+          <span class="receipt-amount">¥${Math.floor(totalAmount).toLocaleString('ja-JP')}－</span>
         </div>
         <div class="receipt-note">※5万円以上の場合は収入印紙が必要です</div>
         <div class="receipt-row" style="margin-top:14px;">
