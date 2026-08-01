@@ -188,6 +188,10 @@
   .toast.err{background:var(--danger);}
 
   .pill-list{display:flex;flex-direction:column;gap:8px;margin-top:10px;}
+  .search-pager{display:flex;align-items:center;justify-content:center;gap:10px;margin:10px 0;font-size:12.5px;color:var(--muted);white-space:nowrap;}
+  .search-pager span{flex:0 0 auto;}
+  .search-pager button{width:auto;flex:0 0 auto;padding:6px 10px;font-size:12px;white-space:nowrap;}
+  .search-pager button:disabled{opacity:.4;}
   .pill{
     display:flex;justify-content:space-between;align-items:center;
     background:#f1f0ea;border-radius:9px;padding:9px 12px;font-size:13px;
@@ -822,23 +826,59 @@ function runSearch(){
     return;
   }
 
-  // same name + same price + same spec(規格) = same drug for the user's purposes; keep just one (first) code per group
-  const seen = new Set();
-  const deduped = [];
+  // same name + same price + same spec(規格) = same drug for the user's purposes; keep just one code per group,
+  // preferring a code that has actually been registered in history before (so "used before" detection below is accurate)
+  const usedCodes = new Set(HISTORY.map(h => h.code));
+  const groups = new Map();
   for(const m of matches){
     const key = (m.info.name || '') + '|' + (m.info.price != null ? m.info.price : '') + '|' + (m.info.spec || '');
-    if(seen.has(key)) continue;
-    seen.add(key);
-    deduped.push(m);
+    const existing = groups.get(key);
+    if(!existing){
+      groups.set(key, m);
+    } else if(!usedCodes.has(existing.code) && usedCodes.has(m.code)){
+      groups.set(key, m); // swap in the previously-used code as the representative
+    }
   }
+  const deduped = [...groups.values()];
 
-  const shown = deduped.slice(0, 30);
+  // previously-registered drugs first, then alphabetical (50音順) by name
+  deduped.sort((a, b) => {
+    const aUsed = usedCodes.has(a.code), bUsed = usedCodes.has(b.code);
+    if(aUsed !== bUsed) return aUsed ? -1 : 1;
+    return (a.info.name || '').localeCompare(b.info.name || '', 'ja');
+  });
+
+  searchResults = deduped;
+  searchPage = 0;
+  renderSearchResultsPage();
+}
+
+const SEARCH_PAGE_SIZE = 30;
+let searchResults = [];
+let searchPage = 0;
+
+function renderSearchResultsPage(){
+  const resultsEl = document.getElementById('search-results');
+  const totalPages = Math.max(1, Math.ceil(searchResults.length / SEARCH_PAGE_SIZE));
+  searchPage = Math.min(Math.max(searchPage, 0), totalPages - 1);
+  const start = searchPage * SEARCH_PAGE_SIZE;
+  const shown = searchResults.slice(start, start + SEARCH_PAGE_SIZE);
+
+  const pager = totalPages > 1 ? `
+    <div class="search-pager">
+      <button class="btn btn-ghost btn-page-prev" ${searchPage === 0 ? 'disabled' : ''}>← 前へ</button>
+      <span>${searchPage + 1} / ${totalPages}ページ</span>
+      <button class="btn btn-ghost btn-page-next" ${searchPage >= totalPages - 1 ? 'disabled' : ''}>次へ →</button>
+    </div>` : '';
+
   resultsEl.innerHTML =
-    `<div class="helptext">${deduped.length.toLocaleString('ja-JP')}件見つかりました${deduped.length > shown.length ? `(先頭${shown.length}件を表示)` : ''}</div>` +
+    `<div class="helptext">${searchResults.length.toLocaleString('ja-JP')}件見つかりました</div>` +
+    pager +
     `<div class="pill-list">` + shown.map(m => `
       <div class="pill search-result-item" data-code="${escapeHtml(m.code)}" style="cursor:pointer;">
         <div><strong>${escapeHtml(m.info.name || '')}</strong><div class="meta">${escapeHtml(m.code)}${m.info.spec ? ` ・ ${escapeHtml(m.info.spec)}` : ''} ・ ¥${m.info.price!=null?Number(m.info.price).toLocaleString('ja-JP'):'-'}</div></div>
-      </div>`).join('') + `</div>`;
+      </div>`).join('') + `</div>` +
+    pager;
 
   resultsEl.querySelectorAll('.search-result-item').forEach(el=>{
     el.addEventListener('click', ()=>{
@@ -846,6 +886,12 @@ function runSearch(){
       document.getElementById('search-input').value = '';
       openEntryForCode(el.dataset.code);
     });
+  });
+  resultsEl.querySelectorAll('.btn-page-prev').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ searchPage--; renderSearchResultsPage(); document.getElementById('search-results').scrollIntoView({behavior:'smooth', block:'start'}); });
+  });
+  resultsEl.querySelectorAll('.btn-page-next').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ searchPage++; renderSearchResultsPage(); document.getElementById('search-results').scrollIntoView({behavior:'smooth', block:'start'}); });
   });
 }
 
