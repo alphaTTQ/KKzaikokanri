@@ -780,6 +780,11 @@ document.getElementById('search-input').addEventListener('keydown', (e)=>{
   if(e.key === 'Enter'){ e.preventDefault(); runSearch(); }
 });
 
+// ひらがな→カタカナ変換(医薬品名は全角カタカナ表記のため、ひらがな入力でも検索できるようにする)
+function toKatakana(str){
+  return str.replace(/[ぁ-ゖ]/g, ch => String.fromCharCode(ch.charCodeAt(0) + 0x60));
+}
+
 function runSearch(){
   const q = document.getElementById('search-input').value.trim();
   const resultsEl = document.getElementById('search-results');
@@ -792,13 +797,13 @@ function runSearch(){
     return;
   }
 
-  const qLower = q.toLowerCase();
+  const qLower = toKatakana(q).toLowerCase();
   const matches = [];
   for(const code in CUSTOM_DB){
-    if((CUSTOM_DB[code].name || '').toLowerCase().includes(qLower)) matches.push({code, info: CUSTOM_DB[code]});
+    if(toKatakana(CUSTOM_DB[code].name || '').toLowerCase().includes(qLower)) matches.push({code, info: CUSTOM_DB[code]});
   }
   for(const code in DRUG_DB){
-    if((DRUG_DB[code].name || '').toLowerCase().includes(qLower)) matches.push({code, info: DRUG_DB[code]});
+    if(toKatakana(DRUG_DB[code].name || '').toLowerCase().includes(qLower)) matches.push({code, info: DRUG_DB[code]});
   }
 
   if(matches.length === 0){
