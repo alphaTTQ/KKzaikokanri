@@ -806,12 +806,22 @@ function runSearch(){
     return;
   }
 
-  const shown = matches.slice(0, 30);
+  // same name + same price + same spec(規格) = same drug for the user's purposes; keep just one (first) code per group
+  const seen = new Set();
+  const deduped = [];
+  for(const m of matches){
+    const key = (m.info.name || '') + '|' + (m.info.price != null ? m.info.price : '') + '|' + (m.info.spec || '');
+    if(seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(m);
+  }
+
+  const shown = deduped.slice(0, 30);
   resultsEl.innerHTML =
-    `<div class="helptext">${matches.length.toLocaleString('ja-JP')}件見つかりました${matches.length > shown.length ? `(先頭${shown.length}件を表示)` : ''}</div>` +
+    `<div class="helptext">${deduped.length.toLocaleString('ja-JP')}件見つかりました${deduped.length > shown.length ? `(先頭${shown.length}件を表示)` : ''}</div>` +
     `<div class="pill-list">` + shown.map(m => `
       <div class="pill search-result-item" data-code="${escapeHtml(m.code)}" style="cursor:pointer;">
-        <div><strong>${escapeHtml(m.info.name || '')}</strong><div class="meta">${escapeHtml(m.code)} ・ ¥${m.info.price!=null?Number(m.info.price).toLocaleString('ja-JP'):'-'}</div></div>
+        <div><strong>${escapeHtml(m.info.name || '')}</strong><div class="meta">${escapeHtml(m.code)}${m.info.spec ? ` ・ ${escapeHtml(m.info.spec)}` : ''} ・ ¥${m.info.price!=null?Number(m.info.price).toLocaleString('ja-JP'):'-'}</div></div>
       </div>`).join('') + `</div>`;
 
   resultsEl.querySelectorAll('.search-result-item').forEach(el=>{
