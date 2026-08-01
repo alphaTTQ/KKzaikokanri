@@ -240,8 +240,16 @@
         <div class="helptext">うまく読み取れない場合は明るい場所で、バーコードに正対してお試しください。</div>
       </div>
 
+      <div class="card">
+        <h2><span class="num">2</span>名称・コードで検索</h2>
+        <label>医薬品名またはコード</label>
+        <input type="text" id="search-input" placeholder="例: ロキソプロフェン、または04987081785445">
+        <button class="btn btn-secondary" id="btn-search" style="margin-top:10px;">検索</button>
+        <div id="search-results"></div>
+      </div>
+
       <div class="card" id="entry-card" style="display:none;">
-        <h2><span class="num">2</span>内容を確認して登録</h2>
+        <h2><span class="num">3</span>内容を確認して登録</h2>
         <div id="lookup-result"></div>
 
         <label>名称</label>
@@ -764,6 +772,55 @@ function onScanSuccess(rawText){
   const parsed = parseGS1(rawText);
   const code = parsed.gtin || rawText.trim();
   openEntryForCode(code, parsed.qty);
+}
+
+/* ============== manual name/code search ============== */
+document.getElementById('btn-search').addEventListener('click', runSearch);
+document.getElementById('search-input').addEventListener('keydown', (e)=>{
+  if(e.key === 'Enter'){ e.preventDefault(); runSearch(); }
+});
+
+function runSearch(){
+  const q = document.getElementById('search-input').value.trim();
+  const resultsEl = document.getElementById('search-results');
+  if(!q){ showToast('医薬品名またはコードを入力してください', true); return; }
+
+  const exact = lookupCode(q);
+  if(exact){
+    resultsEl.innerHTML = '';
+    openEntryForCode(q);
+    return;
+  }
+
+  const qLower = q.toLowerCase();
+  const matches = [];
+  for(const code in CUSTOM_DB){
+    if((CUSTOM_DB[code].name || '').toLowerCase().includes(qLower)) matches.push({code, info: CUSTOM_DB[code]});
+  }
+  for(const code in DRUG_DB){
+    if((DRUG_DB[code].name || '').toLowerCase().includes(qLower)) matches.push({code, info: DRUG_DB[code]});
+  }
+
+  if(matches.length === 0){
+    resultsEl.innerHTML = `<div class="not-found">「${escapeHtml(q)}」に一致する医薬品コード・名称が見つかりませんでした。</div>`;
+    return;
+  }
+
+  const shown = matches.slice(0, 30);
+  resultsEl.innerHTML =
+    `<div class="helptext">${matches.length.toLocaleString('ja-JP')}件見つかりました${matches.length > shown.length ? `(先頭${shown.length}件を表示)` : ''}</div>` +
+    `<div class="pill-list">` + shown.map(m => `
+      <div class="pill search-result-item" data-code="${escapeHtml(m.code)}" style="cursor:pointer;">
+        <div><strong>${escapeHtml(m.info.name || '')}</strong><div class="meta">${escapeHtml(m.code)} ・ ¥${m.info.price!=null?Number(m.info.price).toLocaleString('ja-JP'):'-'}</div></div>
+      </div>`).join('') + `</div>`;
+
+  resultsEl.querySelectorAll('.search-result-item').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      resultsEl.innerHTML = '';
+      document.getElementById('search-input').value = '';
+      openEntryForCode(el.dataset.code);
+    });
+  });
 }
 
 /* ============== entry form ============== */
