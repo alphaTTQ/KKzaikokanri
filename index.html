@@ -365,7 +365,8 @@
 
       <div class="card">
         <h2>データベース情報</h2>
-        <div class="stat-line"><span>内蔵データ件数</span><span id="db-count">-</span></div>
+        <div class="stat-line"><span>マスター件数</span><span id="db-count">-</span></div>
+        <div class="stat-line"><span>マスター取得元</span><span id="master-source">-</span></div>
         <div class="stat-line"><span>追加データ件数</span><span id="custom-count">0</span></div>
       </div>
     </section>
@@ -383,6 +384,182 @@ let DRUG_DB_BY_AG = {}; // 販売包装単位コード(AG) -> {name, price, spec
 let CUSTOM_DB = {}; // code -> {name, price}  (synced via Dropbox data.json)
 let HISTORY = [];   // [{id,date,code,name,qty,price,store}] (synced via Dropbox data.json)
 
+/* ============== 医薬品マスターの読み込み ==============
+   正本は棚卸システム(zaikokanri-saas)のSupabaseマスター。読み込みは3段構え:
+     1. localStorageキャッシュ(gzipのままBase64保存) … 2回目以降は通信ゼロ
+     2. 同一オリジンのスナップショット data/drug-master.json.gz
+        … 棚卸側のGS1マスター更新(import)が生成し、このリポジトリにコミットされる
+     3. 埋め込みデータ(DRUGDATA_B64) … 非常用の古い予備(2026-08-06版で固定)
+   1/2で起動できた場合は、バックグラウンドでSupabaseから updated_at の差分だけを
+   取得して追随する。anonキーはブラウザに配る公開情報で、DB側はRLSにより
+   マスター2テーブルの読み取りしかできない。 */
+const SUPABASE_URL = 'https://bisuyaffxdxmiuqhipcj.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJpc3V5YWZmeGR4bWl1cWhpcGNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyMzExODQsImV4cCI6MjEwMDgwNzE4NH0.HhGczDjvkIewMwp24JwnLys8dGSSjKaRReBpY-uYIko';
+const SNAPSHOT_URL = 'data/drug-master.json.gz';
+const MASTER_CACHE_KEY = 'cache-drug-master-v1';
+const MASTER_FORMAT = 'kk-drug-master/1';
+
+let MASTER = null; // {drugs: Map(ad_code->行), cases: Map(ag_code->行), maxUpdatedAt}
+let MASTER_SOURCE = '-';
+
+function rebuildDrugDicts(){
+  const db = {};
+  const dbByAg = {};
+  for(const row of MASTER.drugs.values()){
+    db[row.ad_code] = {name: row.name || '', price: row.price, spec: row.spec || '', unit: row.unit || '', category: row.category || ''};
+  }
+  for(const row of MASTER.cases.values()){
+    const base = db[row.ad_code];
+    if(!base) continue; // 対応する調剤包装コードの無い販売包装コードは引けない
+    dbByAg[row.ag_code] = Object.assign({}, base, {defaultQty: row.default_qty != null ? row.default_qty : null});
+  }
+  DRUG_DB = db;
+  DRUG_DB_BY_AG = dbByAg;
+}
+
+function masterFromSnapshot(snap){
+  const drugs = new Map();
+  for(const d of snap.drugs) drugs.set(d.ad_code, d);
+  const cases = new Map();
+  for(const c of snap.caseCodes) cases.set(c.ag_code, c);
+  return {drugs, cases, maxUpdatedAt: snap.maxUpdatedAt || null};
+}
+
+function masterToSnapshot(){
+  return {
+    format: MASTER_FORMAT,
+    generatedAt: new Date().toISOString(),
+    maxUpdatedAt: MASTER.maxUpdatedAt,
+    drugCount: MASTER.drugs.size,
+    caseCount: MASTER.cases.size,
+    drugs: [...MASTER.drugs.values()],
+    caseCodes: [...MASTER.cases.values()]
+  };
+}
+
+// gzipのままBase64で保存する(素のJSONだと約6MBでlocalStorageの上限に近い)
+function saveMasterCache(){
+  try{
+    const gz = pako.gzip(JSON.stringify(masterToSnapshot()));
+    let bin = '';
+    const CHUNK = 0x8000;
+    for(let i=0;i<gz.length;i+=CHUNK) bin += String.fromCharCode.apply(null, gz.subarray(i, i+CHUNK));
+    localStorage.setItem(MASTER_CACHE_KEY, btoa(bin));
+  }catch(e){
+    console.error('master cache save failed', e); // 保存できなくても動作は続く
+  }
+}
+
+function loadMasterCache(){
+  try{
+    const b64 = localStorage.getItem(MASTER_CACHE_KEY);
+    if(!b64) return null;
+    const binStr = atob(b64);
+    const bytes = new Uint8Array(binStr.length);
+    for(let i=0;i<binStr.length;i++) bytes[i] = binStr.charCodeAt(i);
+    const snap = JSON.parse(pako.ungzip(bytes, {to:'string'}));
+    if(snap.format !== MASTER_FORMAT) return null; // 形式が変わったら捨てて取り直す
+    return snap;
+  }catch(e){
+    console.error('master cache load failed', e);
+    try{ localStorage.removeItem(MASTER_CACHE_KEY); }catch(_){ /* noop */ }
+    return null;
+  }
+}
+
+function updateMasterInfo(){
+  const countEl = document.getElementById('db-count');
+  if(countEl) countEl.textContent = Object.keys(DRUG_DB).length.toLocaleString('ja-JP') + ' 件';
+  const srcEl = document.getElementById('master-source');
+  if(srcEl){
+    const at = (MASTER && MASTER.maxUpdatedAt) ? new Date(MASTER.maxUpdatedAt).toLocaleDateString('ja-JP') : '-';
+    srcEl.textContent = MASTER_SOURCE + '(マスター更新: ' + at + ')';
+  }
+}
+
+async function loadDrugMaster(){
+  const cached = loadMasterCache();
+  if(cached){
+    MASTER = masterFromSnapshot(cached);
+    MASTER_SOURCE = 'キャッシュ';
+    rebuildDrugDicts();
+    updateMasterInfo();
+  } else {
+    try{
+      const resp = await fetch(SNAPSHOT_URL, {cache: 'no-cache'});
+      if(!resp.ok) throw new Error('HTTP ' + resp.status);
+      const bytes = new Uint8Array(await resp.arrayBuffer());
+      const snap = JSON.parse(pako.ungzip(bytes, {to:'string'}));
+      if(snap.format !== MASTER_FORMAT) throw new Error('unknown format: ' + snap.format);
+      MASTER = masterFromSnapshot(snap);
+      MASTER_SOURCE = 'スナップショット';
+      rebuildDrugDicts();
+      updateMasterInfo();
+      saveMasterCache();
+    }catch(e){
+      // file://で直接開いた場合や、スナップショットの配信前はここに来る。
+      // 非常用の埋め込みデータで動かす(古い可能性がある)
+      console.error('snapshot fetch failed', e);
+      decodeEmbeddedData();
+      return; // 埋め込みは差分同期の起点(updated_at)を持たないため同期しない
+    }
+  }
+  syncMasterDiff(); // awaitしない: 起動を待たせず、裏で最新に追随する
+}
+
+async function sbFetchNewRows(table, keyColumn, cursor){
+  const rows = [];
+  const LIMIT = 1000;
+  let offset = 0;
+  while(true){
+    const url = SUPABASE_URL + '/rest/v1/' + table +
+      '?select=*&updated_at=gt.' + encodeURIComponent(cursor) +
+      '&order=updated_at.asc,' + keyColumn + '.asc&limit=' + LIMIT + '&offset=' + offset;
+    const resp = await fetch(url, {headers: {apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + SUPABASE_ANON_KEY}});
+    if(!resp.ok) throw new Error(table + ' HTTP ' + resp.status);
+    const data = await resp.json();
+    rows.push(...data);
+    if(data.length < LIMIT) break;
+    offset += LIMIT;
+  }
+  return rows;
+}
+
+// マスターの行は削除されない(販売中止も discontinued_at が付くだけ)ため、
+// 差分の適用は上書きマージだけで整合する
+async function syncMasterDiff(){
+  if(!MASTER || !MASTER.maxUpdatedAt) return;
+  try{
+    const cursor = MASTER.maxUpdatedAt;
+    const results = await Promise.all([
+      sbFetchNewRows('drug_master', 'ad_code', cursor),
+      sbFetchNewRows('drug_master_case_codes', 'ag_code', cursor)
+    ]);
+    const drugRows = results[0], caseRows = results[1];
+    if(drugRows.length === 0 && caseRows.length === 0) return;
+
+    let maxUpdatedAt = MASTER.maxUpdatedAt;
+    const consider = (v)=>{ if(v && Date.parse(v) > Date.parse(maxUpdatedAt)) maxUpdatedAt = v; };
+    for(const r of drugRows){
+      MASTER.drugs.set(r.ad_code, {ad_code: r.ad_code, name: r.name, price: r.price, spec: r.spec, unit: r.unit, category: r.category != null ? r.category : null, discontinued_at: r.discontinued_at != null ? r.discontinued_at : null});
+      consider(r.updated_at);
+    }
+    for(const r of caseRows){
+      MASTER.cases.set(r.ag_code, {ag_code: r.ag_code, ad_code: r.ad_code, default_qty: r.default_qty});
+      consider(r.updated_at);
+    }
+    MASTER.maxUpdatedAt = maxUpdatedAt;
+    rebuildDrugDicts();
+    saveMasterCache();
+    MASTER_SOURCE = 'キャッシュ(同期済み)';
+    updateMasterInfo();
+    console.log('master diff sync: ' + drugRows.length + ' drugs, ' + caseRows.length + ' case codes');
+  }catch(e){
+    console.error('master diff sync failed', e); // 失敗しても手元のマスターで動き、次回起動時に再試行される
+  }
+}
+
+/* 非常用フォールバック: 埋め込みデータ(2026-08-06版で固定) */
 function decodeEmbeddedData(){
   try{
     const binStr = atob(DRUGDATA_B64);
@@ -402,7 +579,8 @@ function decodeEmbeddedData(){
     }
     DRUG_DB = db;
     DRUG_DB_BY_AG = dbByAg;
-    document.getElementById('db-count').textContent = arr.length.toLocaleString('ja-JP') + ' 件';
+    MASTER_SOURCE = '埋め込み(2026-08-06版・非常用)';
+    updateMasterInfo();
   }catch(e){
     console.error('drug data decode failed', e);
     showToast('医薬品データの読み込みに失敗しました', true);
@@ -1437,7 +1615,7 @@ function renderCustomDrugs(){
 
 /* ============== init ============== */
 async function init(){
-  decodeEmbeddedData();
+  await loadDrugMaster();
   loadDbxSettings();
   HISTORY = localGetJSON('cache-history', []);
   CUSTOM_DB = localGetJSON('cache-custom-drugs', {});
