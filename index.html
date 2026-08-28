@@ -3,6 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<!-- ホーム画面に追加したとき、Safariのタブではなく独立したアプリとして開く。
+     独立アプリの保存領域はSafariの7日ルール(未使用サイトのデータ自動削除)の
+     対象外になるため、Dropbox認証情報が勝手に消えるのを防げる。
+     2026-08-26にiPadで認証情報・履歴キャッシュが全消失した対策。 -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="在庫移動">
 <title>医薬品在庫管理システム</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
