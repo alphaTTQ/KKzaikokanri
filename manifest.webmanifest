@@ -1,0 +1,9 @@
+{
+  "name": "在庫移動管理",
+  "short_name": "在庫移動",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f8f4",
+  "theme_color": "#4a6741"
+}

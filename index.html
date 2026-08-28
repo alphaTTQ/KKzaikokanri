@@ -10,6 +10,11 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="在庫移動">
+<!-- 上のappleメタだけでは、近年のiPadOSで「ホーム画面に追加」がブックマーク扱いに
+     なることがある(Safariが最後にプライベートモードだと、アイコンからプライベートで
+     開いてしまい、上記の対策が無効になる)。マニフェストの display: standalone が
+     独立アプリとして開かせる確実な指定。2026-08-28、実機でブックマーク扱いを確認して追加 -->
+<link rel="manifest" href="manifest.webmanifest">
 <title>医薬品在庫管理システム</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
