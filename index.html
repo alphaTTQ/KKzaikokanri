@@ -780,6 +780,7 @@ document.querySelectorAll('nav.tabs button').forEach(btn=>{
     btn.classList.add('active');
     document.getElementById('view-'+btn.dataset.tab).classList.add('active');
     if(btn.dataset.tab==='history'){
+      historyPage = 0;
       renderHistory();
       await syncFromDropbox(true);
       renderHistory();
@@ -1176,35 +1177,52 @@ function escapeHtml(s){
 }
 
 /* ============== history view ============== */
+const HISTORY_PAGE_SIZE = 30;
 let selectedHistoryIds = new Set();
+let historyPage = 0;
 
+// full refresh (after sync / delete / settings change): selection is reset
 function renderHistory(){
-  const wrap = document.getElementById('history-table-wrap');
-  const statEl = document.getElementById('history-stat');
   selectedHistoryIds.clear();
   updatePrintButtonState();
+  renderHistoryPage();
+}
+
+// page switch: keeps the selection, so items on different pages can go on one slip
+function renderHistoryPage(){
+  const wrap = document.getElementById('history-table-wrap');
+  const statEl = document.getElementById('history-stat');
   if(HISTORY.length === 0){
     wrap.innerHTML = `<div class="empty-state"><span class="big">📦</span>まだ履歴がありません<br>「スキャン」タブから登録してください</div>`;
     statEl.style.display = 'none';
     return;
   }
-  let totalQty = 0, totalAmount = 0;
-  const rows = HISTORY.map(h=>{
-    totalQty += Number(h.qty)||0;
-    totalAmount += (Number(h.qty)||0) * (Number(h.price)||0);
-    return `<tr>
-      <td><input type="checkbox" class="hist-check" data-id="${h.id}" style="width:auto;"></td>
+  let totalAmount = 0;
+  for(const h of HISTORY) totalAmount += (Number(h.qty)||0) * (Number(h.price)||0);
+
+  const totalPages = Math.max(1, Math.ceil(HISTORY.length / HISTORY_PAGE_SIZE));
+  historyPage = Math.min(Math.max(historyPage, 0), totalPages - 1);
+  const start = historyPage * HISTORY_PAGE_SIZE;
+  const rows = HISTORY.slice(start, start + HISTORY_PAGE_SIZE).map(h=>`<tr>
+      <td><input type="checkbox" class="hist-check" data-id="${h.id}" style="width:auto;" ${selectedHistoryIds.has(h.id) ? 'checked' : ''}></td>
       <td>${escapeHtml(h.date||'')}</td>
       <td>${escapeHtml(h.name||'')}${h.store ? `<div style="font-size:11px;color:var(--muted);margin-top:2px;">→ ${escapeHtml(h.store)}</div>` : ''}</td>
       <td class="num">${h.qty}</td>
       <td class="num">${h.price!=null?Number(h.price).toLocaleString('ja-JP'):'-'}</td>
       <td><button class="del-btn" data-id="${h.id}">削除</button></td>
-    </tr>`;
-  }).join('');
-  wrap.innerHTML = `<table class="hist">
+    </tr>`).join('');
+
+  const pager = totalPages > 1 ? `
+    <div class="search-pager">
+      <button class="btn btn-ghost btn-hist-prev" ${historyPage === 0 ? 'disabled' : ''}>← 前へ</button>
+      <span>${historyPage + 1} / ${totalPages}ページ</span>
+      <button class="btn btn-ghost btn-hist-next" ${historyPage >= totalPages - 1 ? 'disabled' : ''}>次へ →</button>
+    </div>` : '';
+
+  wrap.innerHTML = pager + `<table class="hist">
     <thead><tr><th></th><th>日付</th><th>名称</th><th>数量</th><th>薬価</th><th></th></tr></thead>
     <tbody>${rows}</tbody>
-  </table>`;
+  </table>` + pager;
   statEl.style.display = 'flex';
   statEl.children[0].textContent = `件数: ${HISTORY.length}`;
   statEl.children[1].textContent = `合計金額目安: ¥${totalAmount.toLocaleString('ja-JP')}`;
@@ -1244,11 +1262,23 @@ function renderHistory(){
       updatePrintButtonState();
     });
   });
+
+  const goToPage = (delta)=>{
+    historyPage += delta;
+    renderHistoryPage();
+    document.getElementById('view-history').scrollIntoView({behavior:'smooth', block:'start'});
+  };
+  wrap.querySelectorAll('.btn-hist-prev').forEach(b=>b.addEventListener('click', ()=>goToPage(-1)));
+  wrap.querySelectorAll('.btn-hist-next').forEach(b=>b.addEventListener('click', ()=>goToPage(1)));
 }
 
 function updatePrintButtonState(){
   const btn = document.getElementById('btn-print-slip');
-  if(btn) btn.disabled = selectedHistoryIds.size === 0;
+  if(!btn) return;
+  const n = selectedHistoryIds.size;
+  btn.disabled = n === 0;
+  // selections can sit on other pages, so show how many are picked
+  btn.textContent = n > 0 ? `🖨 選択した内容を伝票印刷（${n}件）` : '🖨 選択した内容を伝票印刷';
 }
 
 document.getElementById('btn-print-slip').addEventListener('click', ()=>{
@@ -1326,6 +1356,16 @@ function printSlip(items){
     .receipt-issuer{margin-top:auto;display:flex;justify-content:flex-end;gap:16px;align-items:flex-start;}
     .receipt-issuer .fill{border-bottom:1px solid #999;min-width:220px;padding:2px 4px;min-height:1.4em;}
     @media print{ .no-print{display:none;} }
+    .print-bar{margin:16px 24px;}
+    .print-bar button{padding:10px 18px;font-size:14px;}
+    /* iPhone opens this popup at a ~980px layout width and zooms out to fit the screen,
+       so a px-sized button becomes tiny. vw scales with that zoom, giving a fixed
+       fraction of the physical screen width. The A4 preview itself is left as-is. */
+    @media screen and (pointer: coarse){
+      body{padding-bottom:22vw;}
+      .print-bar{position:fixed;left:0;right:0;bottom:0;margin:0;padding:2.5vw 4vw;background:#fff;border-top:1px solid #ccc;box-shadow:0 -2px 8px rgba(0,0,0,.08);}
+      .print-bar button{display:block;width:100%;padding:3.5vw 0;font-size:5vw;font-weight:bold;color:#fff;background:#1f6e8c;border:none;border-radius:2.5vw;}
+    }
   </style></head>
   <body>
     <div class="page">
@@ -1387,8 +1427,8 @@ function printSlip(items){
         </div>
       </div>
     </div>
-    <div class="no-print" style="margin:16px 24px;">
-      <button onclick="window.print()" style="padding:10px 18px;font-size:14px;">印刷する</button>
+    <div class="no-print print-bar">
+      <button onclick="window.print()">🖨 印刷する</button>
     </div>
   </body></html>`;
 
