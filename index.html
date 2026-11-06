@@ -185,6 +185,9 @@
   table.hist td{padding:9px 6px;border-bottom:1px solid var(--line);vertical-align:top;}
   table.hist td.num{text-align:right;white-space:nowrap;}
   .del-btn{background:none;border:none;color:var(--danger);font-size:12px;cursor:pointer;padding:2px 4px;}
+  .edit-btn{background:none;border:none;color:var(--moss-dark);font-size:12px;cursor:pointer;padding:2px 4px;}
+  table.hist td.actions{white-space:nowrap;}
+  table.hist td.actions button{display:block;margin-bottom:6px;}
   .empty-state{
     text-align:center;padding:36px 10px;color:var(--muted);font-size:13.5px;
   }
@@ -315,6 +318,23 @@
 
     <!-- HISTORY VIEW -->
     <section class="view" id="view-history">
+      <div class="card" id="hist-edit-card" style="display:none;">
+        <h2><span class="num">✎</span>履歴を修正</h2>
+        <div class="helptext" id="he-target" style="margin-top:0;"></div>
+
+        <label>数量</label>
+        <input type="number" id="he-qty" min="1" step="1" inputmode="numeric">
+
+        <label>移動先店舗</label>
+        <select id="he-store"></select>
+        <input type="text" id="he-store-custom" placeholder="移動先店舗名を入力" style="display:none;margin-top:8px;">
+
+        <div style="display:flex;gap:10px;margin-top:16px;">
+          <button class="btn btn-ghost" id="btn-cancel-hist-edit">キャンセル</button>
+          <button class="btn btn-primary" id="btn-save-hist-edit">この内容で修正</button>
+        </div>
+      </div>
+
       <div class="card">
         <h2><span class="num">#</span>移動履歴</h2>
         <div id="history-table-wrap">
@@ -781,6 +801,7 @@ document.querySelectorAll('nav.tabs button').forEach(btn=>{
     document.getElementById('view-'+btn.dataset.tab).classList.add('active');
     if(btn.dataset.tab==='history'){
       historyPage = 0;
+      document.getElementById('hist-edit-card').style.display = 'none';
       renderHistory();
       await syncFromDropbox(true);
       renderHistory();
@@ -1209,7 +1230,7 @@ function renderHistoryPage(){
       <td>${escapeHtml(h.name||'')}${h.store ? `<div style="font-size:11px;color:var(--muted);margin-top:2px;">→ ${escapeHtml(h.store)}</div>` : ''}</td>
       <td class="num">${h.qty}</td>
       <td class="num">${h.price!=null?Number(h.price).toLocaleString('ja-JP'):'-'}</td>
-      <td><button class="del-btn" data-id="${h.id}">削除</button></td>
+      <td class="actions"><button class="edit-btn" data-id="${h.id}">修正</button><button class="del-btn" data-id="${h.id}">削除</button></td>
     </tr>`).join('');
 
   const pager = totalPages > 1 ? `
@@ -1227,12 +1248,27 @@ function renderHistoryPage(){
   statEl.children[0].textContent = `件数: ${HISTORY.length}`;
   statEl.children[1].textContent = `合計金額目安: ¥${totalAmount.toLocaleString('ja-JP')}`;
 
+  wrap.querySelectorAll('.edit-btn').forEach(b=>{
+    b.addEventListener('click', ()=>openHistoryEdit(b.dataset.id));
+  });
+
   wrap.querySelectorAll('.del-btn').forEach(b=>{
     b.addEventListener('click', async ()=>{
       if(!confirm('この履歴を削除しますか？')) return;
-      HISTORY = HISTORY.filter(h=>h.id !== b.dataset.id);
-      await syncDataAndExcel();
-      renderHistory();
+      const id = b.dataset.id;
+      b.disabled = true; b.textContent = '削除中…';
+      try{
+        await syncFromDropbox(false); // get latest first, so entries added/edited on other devices aren't overwritten
+        // already gone if another device deleted it; nothing to save then
+        if(HISTORY.some(h=>h.id === id)){
+          HISTORY = HISTORY.filter(h=>h.id !== id);
+          await syncDataAndExcel();
+        }
+        const editCard = document.getElementById('hist-edit-card');
+        if(editCard.dataset.id === id) editCard.style.display = 'none';
+      } finally {
+        renderHistory();
+      }
     });
   });
 
@@ -1280,6 +1316,75 @@ function updatePrintButtonState(){
   // selections can sit on other pages, so show how many are picked
   btn.textContent = n > 0 ? `🖨 選択した内容を伝票印刷（${n}件）` : '🖨 選択した内容を伝票印刷';
 }
+
+/* ============== history edit (数量・移動先店舗) ============== */
+const heStore = document.getElementById('he-store');
+const heStoreCustom = document.getElementById('he-store-custom');
+// same choices as the registration form, so the store list lives in one place
+heStore.innerHTML = document.getElementById('f-store').innerHTML;
+heStore.addEventListener('change', ()=>{
+  heStoreCustom.style.display = heStore.value === '__custom__' ? 'block' : 'none';
+  if(heStore.value === '__custom__') heStoreCustom.focus();
+});
+
+function openHistoryEdit(id){
+  const entry = HISTORY.find(h=>h.id===id);
+  if(!entry) return;
+  const card = document.getElementById('hist-edit-card');
+  card.dataset.id = id;
+  document.getElementById('he-target').textContent = `${entry.date || ''}　${entry.name || ''}`;
+  document.getElementById('he-qty').value = entry.qty;
+
+  const store = entry.store || '';
+  const isPreset = [...heStore.options].some(o=>o.value === store && o.value !== '__custom__');
+  heStore.value = isPreset ? store : '__custom__';
+  heStoreCustom.value = isPreset ? '' : store;
+  heStoreCustom.style.display = isPreset ? 'none' : 'block';
+
+  card.style.display = 'block';
+  card.scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+function closeHistoryEdit(){
+  const card = document.getElementById('hist-edit-card');
+  const id = card.dataset.id;
+  card.style.display = 'none';
+  // bring the edited row back into view so the user keeps their place in the list
+  const cb = document.querySelector(`.hist-check[data-id="${id}"]`);
+  if(cb) cb.closest('tr').scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+document.getElementById('btn-cancel-hist-edit').addEventListener('click', closeHistoryEdit);
+
+document.getElementById('btn-save-hist-edit').addEventListener('click', async ()=>{
+  const id = document.getElementById('hist-edit-card').dataset.id;
+  const qty = Number(document.getElementById('he-qty').value);
+  const store = heStore.value === '__custom__' ? heStoreCustom.value.trim() : heStore.value;
+
+  if(!Number.isFinite(qty) || qty <= 0){ showToast('数量を正しく入力してください', true); return; }
+  if(heStore.value === '__custom__' && !store){ showToast('移動先店舗名を入力してください', true); return; }
+
+  const btn = document.getElementById('btn-save-hist-edit');
+  btn.disabled = true; btn.textContent = '修正中…';
+  try{
+    await syncFromDropbox(false); // get latest first, so edits from other devices aren't overwritten
+    const entry = HISTORY.find(h=>h.id===id);
+    if(!entry){
+      showToast('この履歴は他の端末で削除されたため修正できませんでした', true);
+      renderHistory();
+      closeHistoryEdit();
+      return;
+    }
+    entry.qty = qty;
+    entry.store = store;
+    const ok = await syncDataAndExcel(); // on failure syncToDropbox has already shown why
+    if(ok) showToast('修正しました');
+    renderHistory();
+    closeHistoryEdit();
+  } finally {
+    btn.disabled = false; btn.textContent = 'この内容で修正';
+  }
+});
 
 document.getElementById('btn-print-slip').addEventListener('click', ()=>{
   const items = HISTORY.filter(h=>selectedHistoryIds.has(h.id));
